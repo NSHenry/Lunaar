@@ -9,6 +9,7 @@
 #define REPORT_ID_LONG 0x11
 #define MAX_PAYLOAD 18
 #define DEFAULT_TIMEOUT_MS 4000
+#define FAST_TIMEOUT_MS 500
 #define FEATURE_CHANGE_HOST 0x1814
 #define FEATURE_FEATURE_SET 0x0001
 
@@ -19,17 +20,11 @@ static uint16_t next_sw_id(void) {
 }
 
 static int write_long(hid_device *dev, uint8_t devnum, const uint8_t *payload, size_t payload_len) {
-    if (payload_len > MAX_PAYLOAD) {
-        return -1;
-    }
     uint8_t buf[2 + MAX_PAYLOAD] = {0};
     buf[0] = REPORT_ID_LONG;
     buf[1] = devnum;
-    if (payload_len) {
-        memcpy(buf + 2, payload, payload_len);
-    }
-    int written = hid_write(dev, buf, sizeof(buf));
-    return (written == (int)sizeof(buf)) ? 0 : -1;
+    memcpy(buf + 2, payload, payload_len);
+    return (hid_write(dev, buf, sizeof(buf)) == (int)sizeof(buf)) ? 0 : -1;
 }
 
 static int read_matching(hid_device *dev,
@@ -136,7 +131,8 @@ static int get_feature_index(hid_device *dev, uint8_t devnum, uint16_t feature_i
 static int switch_host(hid_device *dev, uint8_t devnum, uint8_t feature_index, uint8_t host_slot) {
     uint16_t request_id = (uint16_t)((feature_index << 8) | 0x10);
     uint8_t params[1] = {host_slot};
-    return hidpp_request(dev, devnum, request_id, params, sizeof(params), NULL, 0, 0, DEFAULT_TIMEOUT_MS);
+    /* Use fast timeout since we don't expect a reply */
+    return hidpp_request(dev, devnum, request_id, params, sizeof(params), NULL, 0, 0, FAST_TIMEOUT_MS);
 }
 
 static hid_device *open_first_device(uint8_t *devnum_out, uint8_t *change_host_index_out, char **path_out) {
@@ -266,7 +262,10 @@ int main(int argc, char **argv) {
         if (dev) {
             devnum = (uint8_t)devnum_override;
             ch_index = (uint8_t)feature_index_override;
-            path = strdup(device_path);
+            /* Skip strdup in silent mode to avoid allocation */
+            if (!silent) {
+                path = strdup(device_path);
+            }
         }
     } else if (device_path) {
         dev = open_device_by_path(device_path, &devnum, &ch_index);
@@ -276,7 +275,9 @@ int main(int argc, char **argv) {
             hid_exit();
             return 1;
         }
-        path = strdup(device_path);
+        if (!silent) {
+            path = strdup(device_path);
+        }
     } else {
         dev = open_first_device(&devnum, &ch_index, &path);
     }
@@ -287,22 +288,18 @@ int main(int argc, char **argv) {
     }
 
     int rc = switch_host(dev, devnum, ch_index, host_slot);
-    if (rc == 0) {
-        if (!silent) {
-            printf("Switched host to slot %ld (device %u, feature index %u)%s%s\n",
-                   host,
-                   devnum,
-                   ch_index,
-                   path ? " via " : "",
-                   path ? path : "");
-        }
-    } else {
+    if (rc == 0 && !silent) {
+        printf("Switched host to slot %ld (device %u, feature index %u)%s%s\n",
+               host,
+               devnum,
+               ch_index,
+               path ? " via " : "",
+               path ? path : "");
+    } else if (rc != 0) {
         fprintf(stderr, "Failed to switch host\n");
     }
 
-    if (path) {
-        free(path);
-    }
+    free(path);
     hid_close(dev);
     hid_exit();
     return rc == 0 ? 0 : 1;

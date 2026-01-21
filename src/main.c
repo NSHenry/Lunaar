@@ -174,18 +174,63 @@ done:
     return found;
 }
 
+static hid_device *open_device_by_path(const char *dev_path, uint8_t *devnum_out, uint8_t *change_host_index_out) {
+    hid_device *handle = hid_open_path(dev_path);
+    if (!handle) {
+        return NULL;
+    }
+    for (uint8_t dn = 0; dn <= 7; dn++) {
+        uint8_t fs_index = 0;
+        if (get_feature_set_index(handle, dn, &fs_index) != 0 || fs_index == 0) {
+            continue;
+        }
+        uint8_t ch_index = 0;
+        if (get_feature_index(handle, dn, FEATURE_CHANGE_HOST, &ch_index) != 0) {
+            continue;
+        }
+        *devnum_out = dn;
+        *change_host_index_out = ch_index;
+        return handle;
+    }
+    hid_close(handle);
+    return NULL;
+}
+
 static void usage(const char *prog) {
-    fprintf(stderr, "Usage: %s <host-number-1-3>\n", prog);
+    fprintf(stderr, "Usage: %s [--path PATH] [--devnum DEVNUM] [--feature-index INDEX] <host-number-1-3>\n", prog);
 }
 
 int main(int argc, char **argv) {
-    if (argc != 2) {
+    const char *device_path = NULL;
+    int devnum_override = -1;
+    int feature_index_override = -1;
+    int host_arg_idx = 1;
+
+    /* Parse optional flags */
+    while (host_arg_idx < argc) {
+        if (strcmp(argv[host_arg_idx], "--path") == 0 && host_arg_idx + 1 < argc) {
+            device_path = argv[host_arg_idx + 1];
+            host_arg_idx += 2;
+        } else if (strcmp(argv[host_arg_idx], "--devnum") == 0 && host_arg_idx + 1 < argc) {
+            char *end = NULL;
+            devnum_override = (int)strtol(argv[host_arg_idx + 1], &end, 0);
+            host_arg_idx += 2;
+        } else if (strcmp(argv[host_arg_idx], "--feature-index") == 0 && host_arg_idx + 1 < argc) {
+            char *end = NULL;
+            feature_index_override = (int)strtol(argv[host_arg_idx + 1], &end, 0);
+            host_arg_idx += 2;
+        } else {
+            break;
+        }
+    }
+
+    if (host_arg_idx >= argc) {
         usage(argv[0]);
         return 1;
     }
     char *end = NULL;
-    long host = strtol(argv[1], &end, 10);
-    if (end == argv[1] || host < 1 || host > 3) {
+    long host = strtol(argv[host_arg_idx], &end, 10);
+    if (end == argv[host_arg_idx] || host < 1 || host > 3) {
         usage(argv[0]);
         return 1;
     }
@@ -199,7 +244,28 @@ int main(int argc, char **argv) {
     uint8_t devnum = 0;
     uint8_t ch_index = 0;
     char *path = NULL;
-    hid_device *dev = open_first_device(&devnum, &ch_index, &path);
+    hid_device *dev = NULL;
+
+    if (device_path && devnum_override >= 0 && feature_index_override >= 0) {
+        /* Fast path: open device directly without any feature discovery */
+        dev = hid_open_path(device_path);
+        if (dev) {
+            devnum = (uint8_t)devnum_override;
+            ch_index = (uint8_t)feature_index_override;
+            path = strdup(device_path);
+        }
+    } else if (device_path) {
+        dev = open_device_by_path(device_path, &devnum, &ch_index);
+        if (!dev) {
+            fprintf(stderr, "Failed to open device at path: %s\n", device_path);
+            fprintf(stderr, "Use auto-discovery or provide --devnum and --feature-index to skip discovery\n");
+            hid_exit();
+            return 1;
+        }
+        path = strdup(device_path);
+    } else {
+        dev = open_first_device(&devnum, &ch_index, &path);
+    }
     if (!dev) {
         fprintf(stderr, "No Logitech HID++ device with CHANGE_HOST found\n");
         hid_exit();

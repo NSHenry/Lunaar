@@ -197,18 +197,22 @@ static hid_device *open_device_by_path(const char *dev_path, uint8_t *devnum_out
 }
 
 static void usage(const char *prog) {
-    fprintf(stderr, "Usage: %s [--path PATH] [--devnum DEVNUM] [--feature-index INDEX] <host-number-1-3>\n", prog);
+    fprintf(stderr, "Usage: %s [-s] [--path PATH] [--devnum DEVNUM] [--feature-index INDEX] <host-number-1-3>\n", prog);
 }
 
 int main(int argc, char **argv) {
     const char *device_path = NULL;
     int devnum_override = -1;
-    int feature_index_override = -1;
+    int feature_index_override = 14;  /* Default to 14 for CHANGE_HOST */
+    int silent = 0;
     int host_arg_idx = 1;
 
     /* Parse optional flags */
     while (host_arg_idx < argc) {
-        if (strcmp(argv[host_arg_idx], "--path") == 0 && host_arg_idx + 1 < argc) {
+        if (strcmp(argv[host_arg_idx], "-s") == 0) {
+            silent = 1;
+            host_arg_idx++;
+        } else if (strcmp(argv[host_arg_idx], "--path") == 0 && host_arg_idx + 1 < argc) {
             device_path = argv[host_arg_idx + 1];
             host_arg_idx += 2;
         } else if (strcmp(argv[host_arg_idx], "--devnum") == 0 && host_arg_idx + 1 < argc) {
@@ -274,12 +278,14 @@ int main(int argc, char **argv) {
 
     int rc = switch_host(dev, devnum, ch_index, host_slot);
     if (rc == 0) {
-        printf("Switched host to slot %ld (device %u, feature index %u)%s%s\n",
-               host,
-               devnum,
-               ch_index,
-               path ? " via " : "",
-               path ? path : "");
+        if (!silent) {
+            printf("Switched host to slot %ld (device %u, feature index %u)%s%s\n",
+                   host,
+                   devnum,
+                   ch_index,
+                   path ? " via " : "",
+                   path ? path : "");
+        }
     } else {
         fprintf(stderr, "Failed to switch host\n");
     }

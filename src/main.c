@@ -197,7 +197,7 @@ static hid_device *open_device_by_path(const char *dev_path, uint8_t *devnum_out
 }
 
 static void usage(const char *prog) {
-    fprintf(stderr, "Usage: %s [-s] [--path PATH] [--devnum DEVNUM] [--feature-index INDEX] <host-number-1-3>\n", prog);
+    fprintf(stderr, "Usage: %s [-s] [--path PATH] [--devnum DEVNUM] [--feature-index INDEX] [--slot SLOT] <host-number-1-3>\n", prog);
 }
 
 int main(int argc, char **argv) {
@@ -205,6 +205,7 @@ int main(int argc, char **argv) {
     int devnum_override = -1;
     int feature_index_override = 14;  /* Default to 14 for CHANGE_HOST */
     int silent = 0;
+    long host = -1;
     int host_arg_idx = 1;
 
     /* Parse optional flags */
@@ -223,18 +224,27 @@ int main(int argc, char **argv) {
             char *end = NULL;
             feature_index_override = (int)strtol(argv[host_arg_idx + 1], &end, 0);
             host_arg_idx += 2;
+        } else if (strcmp(argv[host_arg_idx], "--slot") == 0 && host_arg_idx + 1 < argc) {
+            char *end = NULL;
+            host = strtol(argv[host_arg_idx + 1], &end, 10);
+            host_arg_idx += 2;
         } else {
             break;
         }
     }
 
-    if (host_arg_idx >= argc) {
-        usage(argv[0]);
-        return 1;
+    /* If host not yet set, try to parse positional argument */
+    if (host < 0) {
+        if (host_arg_idx >= argc) {
+            usage(argv[0]);
+            return 1;
+        }
+        char *end = NULL;
+        host = strtol(argv[host_arg_idx], &end, 10);
+        host_arg_idx++;
     }
-    char *end = NULL;
-    long host = strtol(argv[host_arg_idx], &end, 10);
-    if (end == argv[host_arg_idx] || host < 1 || host > 3) {
+
+    if (host < 1 || host > 3) {
         usage(argv[0]);
         return 1;
     }

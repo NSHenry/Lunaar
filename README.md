@@ -2,6 +2,10 @@
 
 Fast macOS-only CLI to trigger Logitech Easy-Switch host changes using HID++ 2.0 directly over `hidapi`.
 
+This project was inspired by [Solaar](https://github.com/pwr-Solaar/Solaar)'s `change-host` implementation but optimized for speed and simplicity on macOS. I primarily use it with a keyboard macro tool (Karabiner-Elements) to switch my non-Logitech keyboard and MX Master seamlessly between hosts.
+
+Warning: I haven't done much C coding, and this is a vibe-coded personal project. Contributions and improvements are welcome!
+
 ## Requirements
 - macOS
 - Homebrew packages: `hidapi` and `pkgconf`

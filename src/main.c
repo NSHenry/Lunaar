@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #define LOGITECH_VID 0x046D
 #define REPORT_ID_LONG 0x11
@@ -12,6 +14,172 @@
 #define FAST_TIMEOUT_MS 500
 #define FEATURE_CHANGE_HOST 0x1814
 #define FEATURE_FEATURE_SET 0x0001
+
+enum cache_mode {
+    CACHE_MODE_AUTO = 0,
+    CACHE_MODE_OFF,
+    CACHE_MODE_REFRESH
+};
+
+static int parse_long_strict(const char *text, int base, long min_value, long max_value, long *out) {
+    char *end = NULL;
+    long value;
+
+    if (!text || !out) {
+        return -1;
+    }
+
+    errno = 0;
+    value = strtol(text, &end, base);
+    if (errno != 0 || end == text || *end != '\0') {
+        return -1;
+    }
+    if (value < min_value || value > max_value) {
+        return -1;
+    }
+    *out = value;
+    return 0;
+}
+
+static int get_default_cache_path(char *out, size_t out_cap) {
+    int n;
+    if (!out || out_cap == 0) {
+        return -1;
+    }
+    n = snprintf(out, out_cap, "/tmp/lunaar-device-cache-%u", (unsigned)getuid());
+    if (n < 0 || (size_t)n >= out_cap) {
+        return -1;
+    }
+    return 0;
+}
+
+static int load_cache(const char *cache_path,
+                      char *path_out,
+                      size_t path_out_cap,
+                      uint8_t *devnum_out,
+                      uint8_t *feature_index_out) {
+    FILE *fp;
+    char line[1024];
+    char cached_path[768] = {0};
+    long cached_devnum = -1;
+    long cached_feature_index = -1;
+
+    if (!cache_path || !path_out || path_out_cap == 0 || !devnum_out || !feature_index_out) {
+        return -1;
+    }
+
+    fp = fopen(cache_path, "r");
+    if (!fp) {
+        return -1;
+    }
+
+    while (fgets(line, sizeof(line), fp)) {
+        char *eq = strchr(line, '=');
+        char *key;
+        char *value;
+        size_t value_len;
+
+        if (!eq) {
+            continue;
+        }
+        *eq = '\0';
+        key = line;
+        value = eq + 1;
+
+        value_len = strcspn(value, "\r\n");
+        value[value_len] = '\0';
+
+        if (strcmp(key, "path") == 0) {
+            if (value_len == 0 || value_len >= sizeof(cached_path)) {
+                fclose(fp);
+                return -1;
+            }
+            memcpy(cached_path, value, value_len + 1);
+        } else if (strcmp(key, "devnum") == 0) {
+            long parsed = 0;
+            if (parse_long_strict(value, 10, 0, 255, &parsed) != 0) {
+                fclose(fp);
+                return -1;
+            }
+            cached_devnum = parsed;
+        } else if (strcmp(key, "feature_index") == 0) {
+            long parsed = 0;
+            if (parse_long_strict(value, 10, 0, 255, &parsed) != 0) {
+                fclose(fp);
+                return -1;
+            }
+            cached_feature_index = parsed;
+        }
+    }
+
+    fclose(fp);
+
+    if (cached_path[0] == '\0' || cached_devnum < 0 || cached_feature_index < 0) {
+        return -1;
+    }
+    if (strlen(cached_path) >= path_out_cap) {
+        return -1;
+    }
+
+    strcpy(path_out, cached_path);
+    *devnum_out = (uint8_t)cached_devnum;
+    *feature_index_out = (uint8_t)cached_feature_index;
+    return 0;
+}
+
+static int save_cache(const char *cache_path, const char *device_path, uint8_t devnum, uint8_t feature_index) {
+    char tmp_path[1024];
+    FILE *fp;
+    int n;
+
+    if (!cache_path || !device_path || device_path[0] == '\0') {
+        return -1;
+    }
+
+    n = snprintf(tmp_path, sizeof(tmp_path), "%s.tmp.%ld", cache_path, (long)getpid());
+    if (n < 0 || (size_t)n >= sizeof(tmp_path)) {
+        return -1;
+    }
+
+    fp = fopen(tmp_path, "w");
+    if (!fp) {
+        return -1;
+    }
+
+    (void)fchmod(fileno(fp), 0600);
+
+    if (fprintf(fp,
+                "version=1\n"
+                "path=%s\n"
+                "devnum=%u\n"
+                "feature_index=%u\n",
+                device_path,
+                (unsigned)devnum,
+                (unsigned)feature_index) < 0) {
+        fclose(fp);
+        unlink(tmp_path);
+        return -1;
+    }
+
+    if (fclose(fp) != 0) {
+        unlink(tmp_path);
+        return -1;
+    }
+
+    if (rename(tmp_path, cache_path) != 0) {
+        unlink(tmp_path);
+        return -1;
+    }
+
+    return 0;
+}
+
+static void invalidate_cache(const char *cache_path) {
+    if (!cache_path || cache_path[0] == '\0') {
+        return;
+    }
+    (void)unlink(cache_path);
+}
 
 static uint16_t next_sw_id(void) {
     static uint8_t sw = 0x0F;
@@ -193,16 +361,23 @@ static hid_device *open_device_by_path(const char *dev_path, uint8_t *devnum_out
 }
 
 static void usage(const char *prog) {
-    fprintf(stderr, "Usage: %s [-s] [--path PATH] [--devnum DEVNUM] [--feature-index INDEX] [--slot SLOT] <host-number-1-3>\n", prog);
+    fprintf(stderr,
+            "Usage: %s [-s] [--path PATH] [--devnum DEVNUM] [--feature-index INDEX] [--slot SLOT] "
+            "[--cache auto|off|refresh] [--cache-file PATH] <host-number-1-3>\n",
+            prog);
 }
 
 int main(int argc, char **argv) {
     const char *device_path = NULL;
+    const char *cache_file_override = NULL;
     int devnum_override = -1;
     int feature_index_override = 14;  /* Default to 14 for CHANGE_HOST */
+    int feature_index_set = 0;
+    int cache_mode = CACHE_MODE_AUTO;
     int silent = 0;
     long host = -1;
     int host_arg_idx = 1;
+    char cache_path[512] = {0};
 
     /* Parse optional flags */
     while (host_arg_idx < argc) {
@@ -213,16 +388,43 @@ int main(int argc, char **argv) {
             device_path = argv[host_arg_idx + 1];
             host_arg_idx += 2;
         } else if (strcmp(argv[host_arg_idx], "--devnum") == 0 && host_arg_idx + 1 < argc) {
-            char *end = NULL;
-            devnum_override = (int)strtol(argv[host_arg_idx + 1], &end, 0);
+            long parsed = 0;
+            if (parse_long_strict(argv[host_arg_idx + 1], 0, 0, 255, &parsed) != 0) {
+                usage(argv[0]);
+                return 1;
+            }
+            devnum_override = (int)parsed;
             host_arg_idx += 2;
         } else if (strcmp(argv[host_arg_idx], "--feature-index") == 0 && host_arg_idx + 1 < argc) {
-            char *end = NULL;
-            feature_index_override = (int)strtol(argv[host_arg_idx + 1], &end, 0);
+            long parsed = 0;
+            if (parse_long_strict(argv[host_arg_idx + 1], 0, 0, 255, &parsed) != 0) {
+                usage(argv[0]);
+                return 1;
+            }
+            feature_index_override = (int)parsed;
+            feature_index_set = 1;
             host_arg_idx += 2;
         } else if (strcmp(argv[host_arg_idx], "--slot") == 0 && host_arg_idx + 1 < argc) {
-            char *end = NULL;
-            host = strtol(argv[host_arg_idx + 1], &end, 10);
+            if (parse_long_strict(argv[host_arg_idx + 1], 10, 1, 3, &host) != 0) {
+                usage(argv[0]);
+                return 1;
+            }
+            host_arg_idx += 2;
+        } else if (strcmp(argv[host_arg_idx], "--cache") == 0 && host_arg_idx + 1 < argc) {
+            const char *mode = argv[host_arg_idx + 1];
+            if (strcmp(mode, "auto") == 0) {
+                cache_mode = CACHE_MODE_AUTO;
+            } else if (strcmp(mode, "off") == 0) {
+                cache_mode = CACHE_MODE_OFF;
+            } else if (strcmp(mode, "refresh") == 0) {
+                cache_mode = CACHE_MODE_REFRESH;
+            } else {
+                usage(argv[0]);
+                return 1;
+            }
+            host_arg_idx += 2;
+        } else if (strcmp(argv[host_arg_idx], "--cache-file") == 0 && host_arg_idx + 1 < argc) {
+            cache_file_override = argv[host_arg_idx + 1];
             host_arg_idx += 2;
         } else {
             break;
@@ -235,8 +437,10 @@ int main(int argc, char **argv) {
             usage(argv[0]);
             return 1;
         }
-        char *end = NULL;
-        host = strtol(argv[host_arg_idx], &end, 10);
+        if (parse_long_strict(argv[host_arg_idx], 10, 1, 3, &host) != 0) {
+            usage(argv[0]);
+            return 1;
+        }
         host_arg_idx++;
     }
 
@@ -251,12 +455,55 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    if (cache_file_override) {
+        if (snprintf(cache_path, sizeof(cache_path), "%s", cache_file_override) >= (int)sizeof(cache_path)) {
+            fprintf(stderr, "Cache file path is too long\n");
+            hid_exit();
+            return 1;
+        }
+    } else if (get_default_cache_path(cache_path, sizeof(cache_path)) != 0) {
+        fprintf(stderr, "Failed to build default cache path\n");
+        hid_exit();
+        return 1;
+    }
+
     uint8_t devnum = 0;
     uint8_t ch_index = 0;
     char *path = NULL;
     hid_device *dev = NULL;
+    int has_explicit_fast_path = (device_path && devnum_override >= 0);
 
-    if (device_path && devnum_override >= 0 && feature_index_override >= 0) {
+    if (cache_mode == CACHE_MODE_AUTO && !has_explicit_fast_path && !device_path && devnum_override < 0 && !feature_index_set) {
+        char cached_path[768] = {0};
+        uint8_t cached_devnum = 0;
+        uint8_t cached_feature_index = 0;
+
+        if (load_cache(cache_path, cached_path, sizeof(cached_path), &cached_devnum, &cached_feature_index) == 0) {
+            hid_device *cached_dev = hid_open_path(cached_path);
+            if (cached_dev) {
+                int cached_rc = switch_host(cached_dev, cached_devnum, cached_feature_index, host_slot);
+                hid_close(cached_dev);
+                if (cached_rc == 0) {
+                    if (!silent) {
+                        printf("Switched host to slot %ld (device %u, feature index %u) via %s\n",
+                               host,
+                               (unsigned)cached_devnum,
+                               (unsigned)cached_feature_index,
+                               cached_path);
+                    }
+                    hid_exit();
+                    return 0;
+                }
+            }
+            invalidate_cache(cache_path);
+        }
+    }
+
+    if (cache_mode == CACHE_MODE_REFRESH) {
+        invalidate_cache(cache_path);
+    }
+
+    if (device_path && devnum_override >= 0) {
         /* Fast path: open device directly without any feature discovery */
         dev = hid_open_path(device_path);
         if (dev) {
@@ -297,6 +544,13 @@ int main(int argc, char **argv) {
                path ? path : "");
     } else if (rc != 0) {
         fprintf(stderr, "Failed to switch host\n");
+    }
+
+    if (rc == 0 && cache_mode != CACHE_MODE_OFF) {
+        const char *path_for_cache = device_path ? device_path : path;
+        if (path_for_cache && path_for_cache[0] != '\0') {
+            (void)save_cache(cache_path, path_for_cache, devnum, ch_index);
+        }
     }
 
     free(path);

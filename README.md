@@ -35,6 +35,12 @@ For faster performance with cached device parameters, use optional flags:
 ./lunaar-switch --path /dev/hidraw0 --devnum 2 --slot 2
 ```
 
+Or use built-in cache handling (default behavior):
+
+```sh
+./lunaar-switch --cache auto 2
+```
+
 ### Optional Flags
 
 - `-s` — Silent mode; suppress normal output (errors always printed)
@@ -42,6 +48,8 @@ For faster performance with cached device parameters, use optional flags:
 - `--devnum DEVNUM` — Device number (0–255, often 0xFF for receiver); skips device discovery
 - `--feature-index INDEX` — Feature index for CHANGE_HOST (defaults to 14); skips feature lookup
 - `--slot SLOT` — Host slot number (1–3); can also be positional argument
+- `--cache auto|off|refresh` — Cache mode (default `auto`)
+- `--cache-file PATH` — Override cache file location (default `/tmp/lunaar-device-cache-<uid>`)
 
 ### Performance Tips
 
@@ -49,13 +57,23 @@ For faster performance with cached device parameters, use optional flags:
    ```sh
    ./lunaar-switch 2
    ```
-   This discovers your device and prints its path, device number, and feature index.
+    This discovers your device and saves path/devnum/feature index in the native cache.
 
-2. **Subsequent runs (instant):**
+2. **Subsequent runs (fast cached path):**
+    ```sh
+    ./lunaar-switch 2
+    ```
+    By default, the binary attempts the cached path first and falls back to discovery when stale.
+
+3. **Disable cache when debugging:**
    ```sh
-   ./lunaar-switch -s --path /dev/hidraw0 --devnum 2 --slot 2
+    ./lunaar-switch --cache off 2
    ```
-   With all parameters cached, only sends the HID++ request—no enumeration or discovery.
+
+4. **Force refresh cache:**
+    ```sh
+    ./lunaar-switch --cache refresh 2
+    ```
 
 ### How It Works
 
@@ -72,7 +90,7 @@ The tool automatically:
 
 ## Karabiner Elements
 
-For seamless integration with Karabiner Elements, use the `lunaar-cached.sh` wrapper script which caches device parameters in `/tmp` (auto-cleared on reboot). This provides fast execution without discovery overhead while handling device path changes after reboots.
+For seamless integration with Karabiner Elements, call the binary directly with native cache support. The app cache is stored in `/tmp` and is automatically refreshed if stale.
 
 ### Example Karabiner Rule
 ```json
@@ -87,7 +105,7 @@ For seamless integration with Karabiner Elements, use the `lunaar-cached.sh` wra
     "manipulators": [
         {
             "from": { "key_code": "f24" },
-            "to": [{ "shell_command": "~/Developer/GitHub/Lunaar/scripts/lunaar-cached.sh 2" }],
+            "to": [{ "shell_command": "~/Developer/GitHub/Lunaar/bin/lunaar-switch 2" }],
             "type": "basic"
         }
     ]
@@ -95,4 +113,4 @@ For seamless integration with Karabiner Elements, use the `lunaar-cached.sh` wra
 ```
 
 
-Note: If script execution fails, then add /Library/Application Support/org.pqrs/Karabiner-Elements/bin/karabiner_console_user_server to the Input Monitoring list in System Preferences > Privacy & Security > Input Monitoring.
+Note: If command execution fails, add /Library/Application Support/org.pqrs/Karabiner-Elements/bin/karabiner_console_user_server to the Input Monitoring list in System Preferences > Privacy & Security > Input Monitoring.

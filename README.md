@@ -1,17 +1,17 @@
 # Lunaar Switch
 
-Fast macOS-only CLI to trigger Logitech Easy-Switch host changes using HID++ 2.0 directly over `hidapi`.
+Fast macOS-only Rust CLI to trigger Logitech Easy-Switch host changes using HID++ 2.0 directly over `hidapi`.
 
 This project was inspired by [Solaar](https://github.com/pwr-Solaar/Solaar)'s `change-host` implementation but optimized for speed and simplicity on macOS. I primarily use it with a keyboard macro tool (Karabiner-Elements) to switch my non-Logitech keyboard and MX Master seamlessly between hosts.
 
-Warning: I haven't done much C coding, and this is a vibe-coded personal project. Contributions and improvements are welcome!
+Contributions and improvements are welcome!
 
 ## Requirements
 - macOS
-- Homebrew packages: `hidapi` and `pkgconf`
+- Rust toolchain (`cargo`)
 
 ```sh
-brew install hidapi pkgconf
+brew install rust
 ```
 
 ## Build
@@ -22,27 +22,27 @@ From the repo root:
 make
 ```
 
-This produces the `lunaar-switch` binary.
+This builds the Rust binary with Cargo and copies it to `bin/lunaar-switch`.
 
 ## Usage
 
 Switch the device to host slot 1–3 (1-based):
 
 ```sh
-./lunaar-switch 2
-./lunaar-switch --slot 1
+./bin/lunaar-switch 2
+./bin/lunaar-switch --slot 1
 ```
 
 For faster performance with cached device parameters, use optional flags:
 
 ```sh
-./lunaar-switch --path /dev/hidraw0 --devnum 2 --slot 2
+./bin/lunaar-switch --path /dev/hidraw0 --devnum 2 --slot 2
 ```
 
 Or use built-in cache handling (default behavior):
 
 ```sh
-./lunaar-switch --cache auto 2
+./bin/lunaar-switch --cache auto 2
 ```
 
 ### Optional Flags
@@ -59,24 +59,24 @@ Or use built-in cache handling (default behavior):
 
 1. **First run (auto-discovery):**
    ```sh
-   ./lunaar-switch 2
+    ./bin/lunaar-switch 2
    ```
     This discovers your device and saves path/devnum/feature index in the native cache.
 
 2. **Subsequent runs (fast cached path):**
     ```sh
-    ./lunaar-switch 2
+    ./bin/lunaar-switch 2
     ```
     By default, the binary attempts the cached path first and falls back to discovery when stale.
 
 3. **Disable cache when debugging:**
    ```sh
-    ./lunaar-switch --cache off 2
+    ./bin/lunaar-switch --cache off 2
    ```
 
 4. **Force refresh cache:**
     ```sh
-    ./lunaar-switch --cache refresh 2
+    ./bin/lunaar-switch --cache refresh 2
     ```
 
 ### How It Works

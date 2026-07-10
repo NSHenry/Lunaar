@@ -1,3 +1,5 @@
 bin/
+target/
 *.o
 .DS_Store
+Cargo.lock

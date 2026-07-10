@@ -1,0 +1,8 @@
+[package]
+name = "lunaar-switch"
+version = "0.2.0"
+edition = "2026"
+
+[dependencies]
+hidapi = "2.6"
+libc = "0.2"
